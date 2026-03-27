@@ -1,0 +1,249 @@
+# 口算语音训练应用 - 详细设计规范
+
+## 1. 项目概述
+
+- **项目名称**: math_voice_app
+- **项目路径**: ~/程序/math_voice_app
+- **核心功能**: 通过纯语音交互练习100以内口算（加减乘除），支持中英文双语播报
+- **目标用户**: 儿童/成人练习口算
+
+## 2. 功能规范
+
+### 2.1 题型与出题规则
+
+| 题型 | 范围 | 说明 |
+|------|------|------|
+| 加法 (a + b) | a, b ∈ [1, 100] | 两数之和 ≤ 100 |
+| 减法 (a - b) | a, b ∈ [1, 100] | a ≥ b，结果 ≥ 0 |
+| 乘法 (a × b) | a ∈ [1, 9], b ∈ [1, 9] | 乘积 ≤ 81 |
+
+**出题顺序**:
+- 第1-5题：中文播报（题型随机）
+- 第6-10题：英文播报（题型随机）
+- 每种题型出现概率相等（加法33.3%、减法33.3%、乘法33.3%）
+
+### 2.2 语音交互流程
+
+```
+[开始] → 语音提示"开始练习" → 第1题
+  ↓
+[播报题目]
+  ├─ 中文："七加三等于多少？"
+  └─ 英文："What is seven plus three?"
+
+  ↓
+[等待用户回答] (最长10秒)
+
+  ↓
+[识别用户语音] → 提取数字答案
+
+  ↓
+[判断对错] → 语音播报
+  ├─ 正确："正确！" / "Correct!"
+  └─ 错误："答案是七" / "The answer is seven"
+
+  ↓
+[下一题] 或 [结束]
+
+  ↓
+[播报正确率] "你答对了8题，共10题" / "You got 8 out of 10 correct"
+
+  ↓
+[显示结果页面]
+```
+
+### 2.3 数据结构
+
+**题目 (Question)**:
+```dart
+class Question {
+  final int num1;           // 第一个数
+  final int num2;           // 第二个数
+  final String operator;     // "+" | "-" | "×"
+  final int correctAnswer;   // 正确答案
+  final int? userAnswer;    // 用户答案（null表示未回答）
+  final bool isCorrect;     // 是否正确
+  final bool isChinese;     // 是否中文播报
+}
+```
+
+**游戏状态 (GameState)**:
+```dart
+enum GamePhase {
+  idle,       // 初始状态
+  listening,  // 等待回答
+  answering,  // 播报结果
+  finished,   // 完成
+}
+
+class GameState {
+  final List<Question> questions;  // 10道题目
+  final int currentIndex;           // 当前题目索引 (0-9)
+  final GamePhase phase;           // 当前阶段
+}
+```
+
+### 2.4 语音识别规则
+
+- 支持中文数字识别：一、二、三... 或 1、2、3...
+- 支持英文数字识别：one、two、three... 或 1、2、3...
+- 提取答案中的第一个有效数字
+- 超时（10秒无回答）视为错误，播报正确答案
+
+### 2.5 语音合成设置
+
+| 参数 | 值 |
+|------|-----|
+| 中文语音 | zh-CN（语速1.0） |
+| 英文语音 | en-US（语速1.0） |
+| 音量 | 1.0 |
+| 音调 | 1.0 |
+
+## 3. UI 设计
+
+### 3.1 页面结构
+
+| 页面 | 路由 | 说明 |
+|------|------|------|
+| 主页 | `/` | 开始按钮 |
+| 练习页 | `/practice` | 纯语音交互，无UI |
+| 结果页 | `/result` | 显示10道题目和答案 |
+
+### 3.2 主页设计
+
+```
+┌─────────────────────────┐
+│                         │
+│      🧮 口算训练         │
+│                         │
+│   [开始练习] 按钮        │
+│                         │
+│   100以内加减乘除         │
+│   中英文语音练习          │
+│                         │
+└─────────────────────────┘
+```
+
+### 3.3 结果页设计
+
+```
+┌─────────────────────────┐
+│      练习完成！           │
+│                         │
+│     你答对 8/10 题        │
+│                         │
+│  ┌───────────────────┐  │
+│  │ 1. 7 + 3 = 10  ✓  │  │
+│  │ 2. 8 - 5 = 3   ✓  │  │
+│  │ 3. 6 × 7 = 42  ✗  │  │
+│  │ ...               │  │
+│  └───────────────────┘  │
+│                         │
+│     [再来一次] 按钮       │
+│                         │
+└─────────────────────────┘
+```
+
+## 4. 技术方案
+
+### 4.1 依赖包
+
+```yaml
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_tts: ^4.0.2          # 语音合成
+  speech_to_text: ^6.6.0       # 语音识别
+  permission_handler: ^11.3.0  # 权限管理
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+```
+
+### 4.2 权限需求
+
+**Android** (AndroidManifest.xml):
+```xml
+<uses-permission android:name="android.permission.RECORD_AUDIO"/>
+<uses-permission android:name="android.permission.INTERNET"/>
+```
+
+### 4.3 项目结构
+
+```
+math_voice_app/
+├── lib/
+│   ├── main.dart
+│   ├── models/
+│   │   ├── question.dart
+│   │   └── game_state.dart
+│   ├── services/
+│   │   ├── tts_service.dart      # 语音合成服务
+│   │   ├── stt_service.dart      # 语音识别服务
+│   │   └── question_generator.dart  # 出题服务
+│   ├── pages/
+│   │   ├── home_page.dart
+│   │   ├── practice_page.dart
+│   │   └── result_page.dart
+│   └── widgets/
+│       └── result_card.dart
+├── pubspec.yaml
+└── android/
+    └── app/src/main/AndroidManifest.xml
+```
+
+### 4.4 状态管理
+
+使用 Flutter StatefulWidget + setState 管理状态，简单高效。
+
+### 4.5 数字转文字映射
+
+**中文**:
+| 数字 | 中文 |
+|------|------|
+| 0 | 零 | 1 | 一 | 2 | 二 | 3 | 三 | 4 | 四 |
+| 5 | 五 | 6 | 六 | 7 | 七 | 8 | 八 | 9 | 九 |
+| 10 | 十 | ... | ... | 100 | 一百 |
+
+**英文**:
+直接使用 flutter_tts 的英文发音，数字用文字表示（如 "seven"）
+
+## 5. 验收标准
+
+- [ ] 主页显示"开始练习"按钮
+- [ ] 点击开始后进入纯语音模式
+- [ ] 前5题中文播报，后5题英文播报
+- [ ] 语音识别用户回答并判断对错
+- [ ] 正确/错误有对应语音反馈
+- [ ] 10题完成后播报正确率
+- [ ] 结果页显示10道题目和答案
+- [ ] "再来一次"可重新开始
+- [ ] Android APK 成功构建
+
+## 6. 语音文本模板
+
+### 6.1 中文模板
+
+| 场景 | 文本 |
+|------|------|
+| 开始 | "开始练习" |
+| 加法 | "{a}加{b}等于多少？" |
+| 减法 | "{a}减{b}等于多少？" |
+| 乘法 | "{a}乘{b}等于多少？" |
+| 正确 | "正确！" |
+| 错误 | "答案是{答案}" |
+| 结束 | "你答对了{正确数}题，共{总题数}题" |
+
+### 6.2 英文模板
+
+| 场景 | 文本 |
+|------|------|
+| 开始 | "Let's start practice" |
+| 加法 | "What is {a} plus {b}?" |
+| 减法 | "What is {a} minus {b}?" |
+| 乘法 | "What is {a} times {b}?" |
+| 正确 | "Correct!" |
+| 错误 | "The answer is {answer}" |
+| 结束 | "You got {correct} out of {total} correct" |
