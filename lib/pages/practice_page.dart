@@ -1,15 +1,21 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
 import '../models/game_state.dart';
 import '../models/question.dart';
 import '../services/tts_service.dart';
-import '../services/stt_service.dart';
 import '../services/question_generator.dart';
+import '../widgets/numeric_keypad.dart';
 import 'result_page.dart';
 
 class PracticePage extends StatefulWidget {
-  const PracticePage({super.key});
+  final bool showSubtitles;
+  final double englishSpeechRate;
+
+  const PracticePage({
+    super.key,
+    this.showSubtitles = false,
+    this.englishSpeechRate = 0.5,
+  });
 
   @override
   State<PracticePage> createState() => _PracticePageState();
@@ -17,12 +23,12 @@ class PracticePage extends StatefulWidget {
 
 class _PracticePageState extends State<PracticePage> {
   final TtsService _ttsService = TtsService();
-  final SttService _sttService = SttService();
   final QuestionGenerator _questionGenerator = QuestionGenerator();
 
   GameState? _gameState;
-  Timer? _timeoutTimer;
   bool _isProcessing = false;
+  String _currentInput = '';
+  bool _servicesInitialized = false;
 
   @override
   void initState() {
@@ -31,29 +37,31 @@ class _PracticePageState extends State<PracticePage> {
   }
 
   Future<void> _initServices() async {
-    // 请求麦克风权限
-    final status = await Permission.microphone.request();
-    if (!status.isGranted) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('需要麦克风权限才能使用语音功能')),
-        );
-        Navigator.of(context).pop();
-      }
-      return;
+    debugPrint('_initServices: starting');
+
+    // 初始化TTS
+    _initInBackground();
+  }
+
+  Future<void> _initInBackground() async {
+    debugPrint('_initInBackground: starting');
+    try {
+      await _ttsService.init();
+
+      // 设置英文语速
+      _ttsService.setEnglishSpeechRate(widget.englishSpeechRate);
+
+      _servicesInitialized = true;
+      debugPrint('_initInBackground: TTS initialized');
+
+      // 立即开始游戏
+      _startGame();
+    } catch (e) {
+      debugPrint('_initInBackground: error: $e');
+      // 即使失败也继续开始游戏
+      _servicesInitialized = true;
+      _startGame();
     }
-
-    // 初始化TTS和STT
-    await _ttsService.init();
-    await _sttService.init();
-
-    _sttService.onResult = _onSpeechResult;
-    _sttService.onError = (error) {
-      debugPrint('STT Error: $error');
-    };
-
-    // 开始游戏
-    _startGame();
   }
 
   void _startGame() {
@@ -96,6 +104,12 @@ class _PracticePageState extends State<PracticePage> {
       return;
     }
 
+    debugPrint('askCurrentQuestion: index=${_gameState!.currentIndex}, question=${question.questionTextChinese}');
+
+    // 重置输入
+    _currentInput = '';
+    _isProcessing = false;
+
     setState(() {
       _gameState = _gameState!.copyWith(phase: GamePhase.listening);
     });
@@ -106,53 +120,40 @@ class _PracticePageState extends State<PracticePage> {
     } else {
       await _ttsService.speakEnglish(question.questionTextEnglish);
     }
-
-    // 开始监听
-    Future.delayed(const Duration(milliseconds: 500), () {
-      if (mounted) {
-        _startListening();
-      }
-    });
   }
 
-  void _startListening() {
-    final question = _gameState?.currentQuestion;
-    if (question == null) return;
-
-    // 设置超时
-    _timeoutTimer?.cancel();
-    _timeoutTimer = Timer(const Duration(seconds: 10), () {
-      if (mounted && _gameState?.phase == GamePhase.listening) {
-        _handleTimeout();
-      }
-    });
-
-    _sttService.startListening(
-      localeId: question.isChinese ? 'zh_CN' : 'en_US',
-    );
-  }
-
-  void _handleTimeout() {
-    _sttService.stopListening();
-    _handleAnswer(null);
-  }
-
-  void _onSpeechResult(String text) {
+  void _onKeypadInput(String value) {
     if (_isProcessing) return;
+    if (_gameState?.phase != GamePhase.listening) return;
+
+    setState(() {
+      _currentInput = value;
+    });
+  }
+
+  void _onSubmit() {
+    if (_isProcessing) return;
+    if (_gameState?.phase != GamePhase.listening) return;
+    if (_currentInput.isEmpty) return;
+
+    final number = int.tryParse(_currentInput);
+    if (number == null) return;
+
     _isProcessing = true;
-
-    _sttService.stopListening();
-    _timeoutTimer?.cancel();
-
-    final number = extractNumber(text);
     _handleAnswer(number);
   }
 
-  Future<void> _handleAnswer(int? number) async {
-    if (_gameState == null || _isProcessing) return;
+  Future<void> _handleAnswer(int number) async {
+    if (_gameState == null) {
+      debugPrint('handleAnswer: no game state');
+      _isProcessing = false;
+      return;
+    }
 
     final question = _gameState!.currentQuestion!;
     final isCorrect = number == question.correctAnswer;
+
+    debugPrint('handleAnswer: number=$number, correctAnswer=${question.correctAnswer}, isCorrect=$isCorrect');
 
     // 更新题目状态
     final updatedQuestions = List<Question>.from(_gameState!.questions);
@@ -176,11 +177,12 @@ class _PracticePageState extends State<PracticePage> {
     // 播报结果
     await _speakResult(isCorrect, question);
 
-    _isProcessing = false;
-
-    // 下一题或结束
+    // 标记处理完成，准备下一题
     Future.delayed(const Duration(seconds: 1), () {
+      debugPrint('handleAnswer: moving to next question');
       if (mounted) {
+        _isProcessing = false;
+        _currentInput = '';
         _nextQuestion();
       }
     });
@@ -203,13 +205,21 @@ class _PracticePageState extends State<PracticePage> {
   }
 
   void _nextQuestion() {
-    if (_gameState == null) return;
+    if (_gameState == null) {
+      debugPrint('nextQuestion: no game state');
+      return;
+    }
+
+    debugPrint('nextQuestion: currentIndex=${_gameState!.currentIndex}, total=${_gameState!.questions.length}');
 
     final nextIndex = _gameState!.currentIndex + 1;
 
     if (nextIndex >= _gameState!.questions.length) {
+      debugPrint('nextQuestion: all questions done, finishing');
       _finishGame();
     } else {
+      debugPrint('nextQuestion: moving to index $nextIndex');
+
       setState(() {
         _gameState = _gameState!.copyWith(
           currentIndex: nextIndex,
@@ -219,6 +229,7 @@ class _PracticePageState extends State<PracticePage> {
 
       // 播报下一题
       Future.delayed(const Duration(seconds: 1), () {
+        debugPrint('nextQuestion: asking next question');
         if (mounted) {
           _askCurrentQuestion();
         }
@@ -252,7 +263,10 @@ class _PracticePageState extends State<PracticePage> {
               onRestart: () {
                 Navigator.of(context).pushReplacement(
                   MaterialPageRoute(
-                    builder: (context) => const PracticePage(),
+                    builder: (context) => PracticePage(
+                      showSubtitles: widget.showSubtitles,
+                      englishSpeechRate: widget.englishSpeechRate,
+                    ),
                   ),
                 );
               },
@@ -265,9 +279,7 @@ class _PracticePageState extends State<PracticePage> {
 
   @override
   void dispose() {
-    _timeoutTimer?.cancel();
     _ttsService.dispose();
-    _sttService.dispose();
     super.dispose();
   }
 
@@ -286,46 +298,113 @@ class _PracticePageState extends State<PracticePage> {
           ),
         ),
         child: SafeArea(
-          child: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Text(
-                  '🎤',
-                  style: TextStyle(fontSize: 80),
+          child: Column(
+            children: [
+              // 顶部进度
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                    if (_gameState != null)
+                      Text(
+                        '第 ${_gameState!.currentIndex + 1} / ${_gameState!.totalCount} 题',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    const SizedBox(width: 48),
+                  ],
                 ),
-                const SizedBox(height: 30),
-                Text(
-                  _getStatusText(),
-                  style: const TextStyle(
-                    fontSize: 24,
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
+              ),
+
+              // 题目显示区域
+              Expanded(
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text(
+                        '🧮',
+                        style: TextStyle(fontSize: 60),
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        _getStatusText(),
+                        style: const TextStyle(
+                          fontSize: 28,
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 30),
+
+                      // 输入显示
+                      Container(
+                        width: 200,
+                        height: 60,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white30),
+                        ),
+                        child: Center(
+                          child: Text(
+                            _currentInput.isEmpty ? '?' : _currentInput,
+                            style: TextStyle(
+                              fontSize: 36,
+                              color: _currentInput.isEmpty
+                                  ? Colors.white54
+                                  : Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      const Text(
+                        '输入答案',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.white60,
+                        ),
+                      ),
+                    ],
                   ),
-                  textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: 20),
-                if (_gameState != null)
-                  Text(
-                    '第 ${_gameState!.currentIndex + 1} / ${_gameState!.totalCount} 题',
+              ),
+
+              // 数字键盘
+              if (_gameState?.phase == GamePhase.listening)
+                NumericKeypad(
+                  onInput: _onKeypadInput,
+                  onSubmit: _onSubmit,
+                ),
+
+              // 结果提示
+              if (_gameState?.phase == GamePhase.answering)
+                Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Text(
+                    _getResultText(),
                     style: const TextStyle(
-                      fontSize: 18,
-                      color: Colors.white70,
+                      fontSize: 24,
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
                     ),
+                    textAlign: TextAlign.center,
                   ),
-                const SizedBox(height: 40),
-                _buildAnimation(),
-                const SizedBox(height: 30),
-                if (_gameState?.phase == GamePhase.listening)
-                  const Text(
-                    '请回答...',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.white60,
-                    ),
-                  ),
-              ],
-            ),
+                ),
+
+              const SizedBox(height: 20),
+            ],
           ),
         ),
       ),
@@ -334,6 +413,10 @@ class _PracticePageState extends State<PracticePage> {
 
   String _getStatusText() {
     if (_gameState == null) return '准备中...';
+
+    if (!_servicesInitialized && _gameState!.phase == GamePhase.ready) {
+      return '即将开始...';
+    }
 
     switch (_gameState!.phase) {
       case GamePhase.idle:
@@ -345,32 +428,29 @@ class _PracticePageState extends State<PracticePage> {
         if (q == null) return '';
         return q.isChinese ? q.questionTextChinese : q.questionTextEnglish;
       case GamePhase.answering:
-        return '回答正确！';
+        final q = _gameState!.currentQuestion;
+        if (q == null) return '';
+        if (q.isCorrect == true) {
+          return q.isChinese ? '回答正确！' : 'Correct!';
+        } else {
+          return q.isChinese
+              ? '回答错误，正确答案是${q.correctAnswer}'
+              : 'Wrong! The answer is ${q.correctAnswer}';
+        }
       case GamePhase.finished:
         return '练习完成！';
     }
   }
 
-  Widget _buildAnimation() {
-    if (_gameState?.phase == GamePhase.listening) {
-      return const SizedBox(
-        width: 100,
-        height: 100,
-        child: CircularProgressIndicator(
-          color: Colors.white,
-          strokeWidth: 3,
-        ),
-      );
+  String _getResultText() {
+    final q = _gameState?.currentQuestion;
+    if (q == null) return '';
+    if (q.isCorrect == true) {
+      return q.isChinese ? '✓ 正确！' : '✓ Correct!';
+    } else {
+      return q.isChinese
+          ? '✗ 答案是 ${q.correctAnswer}'
+          : '✗ The answer is ${q.correctAnswer}';
     }
-
-    return const SizedBox(
-      width: 100,
-      height: 100,
-      child: Icon(
-        Icons.mic,
-        size: 80,
-        color: Colors.white,
-      ),
-    );
   }
 }

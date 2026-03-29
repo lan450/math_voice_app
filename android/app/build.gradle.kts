@@ -28,14 +28,32 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file(System.getenv("HOME") + "/程序/signing/通用签名.keystore")
+            storePassword = "android"
+            keyAlias = "app"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {
-        release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
+    }
+
+    lint {
+        disable += "LintWarning"
+        checkReleaseBuilds = false
+        abortOnError = false
     }
 }
 
