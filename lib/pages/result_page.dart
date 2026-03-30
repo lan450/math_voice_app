@@ -101,8 +101,31 @@ class ResultPage extends StatelessWidget {
   }
 
   Widget _buildQuestionCard(int index, Question question) {
-    final isCorrect = question.isCorrect ?? false;
+    final isCorrect = question.isCorrect;
     final userAnswer = question.userAnswer;
+    final isNotJudged = isCorrect == null;
+
+    Color backgroundColor;
+    Color iconColor;
+    IconData icon;
+    String answerText;
+
+    if (isNotJudged) {
+      backgroundColor = Colors.orange.withValues(alpha: 0.8);
+      iconColor = Colors.orange.shade300;
+      icon = Icons.help;
+      answerText = '（未评判）';
+    } else if (isCorrect) {
+      backgroundColor = Colors.green.withValues(alpha: 0.8);
+      iconColor = Colors.green.shade300;
+      icon = Icons.check_circle;
+      answerText = '你的答案: $userAnswer ✓';
+    } else {
+      backgroundColor = Colors.red.withValues(alpha: 0.8);
+      iconColor = Colors.red.shade300;
+      icon = Icons.cancel;
+      answerText = '正确答案: ${question.correctAnswer} (你的: $userAnswer)';
+    }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -117,9 +140,7 @@ class ResultPage extends StatelessWidget {
             width: 36,
             height: 36,
             decoration: BoxDecoration(
-              color: isCorrect
-                  ? Colors.green.withValues(alpha: 0.8)
-                  : Colors.red.withValues(alpha: 0.8),
+              color: backgroundColor,
               shape: BoxShape.circle,
             ),
             child: Center(
@@ -148,11 +169,9 @@ class ResultPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  isCorrect
-                      ? '你的答案: $userAnswer ✓'
-                      : '正确答案: ${question.correctAnswer} (你的: $userAnswer)',
+                  answerText,
                   style: TextStyle(
-                    color: isCorrect ? Colors.green.shade200 : Colors.orange.shade200,
+                    color: isNotJudged ? Colors.orange.shade200 : (isCorrect ? Colors.green.shade200 : Colors.orange.shade200),
                     fontSize: 14,
                   ),
                 ),
@@ -160,8 +179,8 @@ class ResultPage extends StatelessWidget {
             ),
           ),
           Icon(
-            isCorrect ? Icons.check_circle : Icons.cancel,
-            color: isCorrect ? Colors.green.shade300 : Colors.red.shade300,
+            icon,
+            color: iconColor,
             size: 28,
           ),
         ],
